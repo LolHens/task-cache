@@ -22,13 +22,14 @@ object CachedTask {
   }
 
   implicit class CachedTaskOps[A](val task: Task[A]) extends AnyVal {
-    def persist(persistence: Persistence,
-                duration: Duration,
-                cacheErrors: Boolean = true): Task[A] =
+    def persist[Key](persistence: Persistence[Key],
+                     duration: Duration,
+                     cacheErrors: Boolean = true)
+                    (key: Key): Task[A] =
       duration match {
         case Duration.Inf =>
           (for {
-            mvar <- persistence[Option[Try[A]]](None).memoize
+            mvar <- persistence.get[Try[A]](key).memoize
             elemOption <- mvar.take
             elem <- elemOption.map(Task.now).getOrElse(task.materialize)
             newElemOption = Some(elem).filter(_.isSuccess || cacheErrors)
@@ -40,13 +41,13 @@ object CachedTask {
         case undef if undef eq Duration.Undefined =>
           val emptyRef = SoftReference(null)
           (for {
-            mvar <- persistence[SoftReference[Try[A]]](emptyRef).memoize
-            ref <- mvar.take
-            elemOption = ref.get
+            mvar <- persistence.get[SoftReference[Try[A]]](key).memoize
+            refOption <- mvar.take
+            elemOption = refOption.flatMap(_.get)
             elem <- elemOption.map(Task.now).getOrElse(task.materialize)
-            newRef = elemOption.map(_ => ref).getOrElse(
-              if (elem.isSuccess || cacheErrors) SoftReference(elem)
-              else emptyRef
+            newRef = elemOption.map(_ => refOption).getOrElse(
+              if (elem.isSuccess || cacheErrors) Some(SoftReference(elem))
+              else None
             )
             _ <- mvar.put(newRef)
           } yield
@@ -56,7 +57,7 @@ object CachedTask {
         case ttl: FiniteDuration =>
           val millis = ttl.toMillis
           (for {
-            mvar <- persistence[Option[(Try[A], Long)]](None).memoize
+            mvar <- persistence.get[(Try[A], Long)](key).memoize
             elemOption <- mvar.take
             now = System.currentTimeMillis()
             elem <- elemOption.filter(_._2 + millis > now).map(Task.now).getOrElse(
@@ -72,9 +73,10 @@ object CachedTask {
           task
       }
 
-    def persistOnSuccess(persistence: Persistence,
-                         duration: Duration): Task[A] =
-      persist(persistence, duration, cacheErrors = false)
+    def persistOnSuccess[Key](persistence: Persistence[Key],
+                              duration: Duration)
+                             (key: Key): Task[A] =
+      persist(persistence, duration, cacheErrors = false)(key)
 
     def cache(duration: Duration,
               cacheErrors: Boolean = true): Task[A] =
@@ -87,7 +89,7 @@ object CachedTask {
           task
 
         case _ =>
-          persist(Persistence.Memory, duration, cacheErrors)
+          persist(Persistence.Memory, duration, cacheErrors)(())
       }
 
     def cacheOnSuccess(duration: Duration): Task[A] =

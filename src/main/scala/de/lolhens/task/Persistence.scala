@@ -2,21 +2,20 @@ package de.lolhens.task
 
 import monix.eval.{MVar, Task}
 
-trait Persistence {
-  def empty[A]: Task[MVar[A]]
+trait Persistence[Key] {
+  def get[A](key: Key): Task[MVar[Option[A]]]
 
-  def apply[A](default: A): Task[MVar[A]] =
+  /*def apply[A](default: A): Task[MVar[A]] =
     for {
       mvar <- empty[A]
       _ <- mvar.put(default)
     } yield
-      mvar
+      mvar*/
 }
 
 object Persistence {
-
-  object Memory extends Persistence {
-    override def empty[A]: Task[MVar[A]] = MVar.empty
+  object Memory extends Persistence[Unit] {
+    override def get[A](key: Unit): Task[MVar[Option[A]]] = MVar(None)
   }
 
 }

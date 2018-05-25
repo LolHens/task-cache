@@ -29,7 +29,7 @@ object CachedTask {
       duration match {
         case Duration.Inf =>
           (for {
-            mvar <- persistence.get[Try[A]](key).memoize
+            mvar <- persistence.use[Try[A]](key).memoize
             elemOption <- mvar.take
             elem <- elemOption.map(Task.now)
               .getOrElse(task.materialize)
@@ -42,13 +42,15 @@ object CachedTask {
         case ttl: FiniteDuration =>
           val millis = ttl.toMillis
           (for {
-            mvar <- persistence.get[(Try[A], Long)](key).memoize
-            elemOption <- mvar.take
-            now = System.currentTimeMillis()
-            elem <- elemOption.filter(_._2 + millis > now).map(Task.now)
-              .getOrElse(task.materialize.map(_ -> now))
-            newElemOption = Some(elem).filter(_._1.isSuccess || cacheErrors)
-            _ <- mvar.put(newElemOption)
+            elem <- persistence.use[(Try[A], Long)](key) { elemOption =>
+              val now = System.currentTimeMillis()
+              for {
+                elem <- elemOption.filter(_._2 + millis > now).map(Task.now)
+                  .getOrElse(task.materialize.map(_ -> now))
+                newElemOption = Some(elem).filter(_._1.isSuccess || cacheErrors)
+              } yield
+                (newElemOption, elem)
+            }
           } yield
             elem._1)
             .dematerialize

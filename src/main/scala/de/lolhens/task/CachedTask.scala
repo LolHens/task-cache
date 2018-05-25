@@ -1,13 +1,12 @@
 package de.lolhens.task
 
 import monix.eval.{MVar, Task}
-import monix.execution.Scheduler.Implicits.global
 
 import scala.concurrent.duration._
 import scala.ref.SoftReference
 import scala.util.Try
 
-object Cached {
+object CachedTask {
   def main(args: Array[String]): Unit = {
     val task = Task.eval(println("Test"))
     val task1 = task.cache(Duration.Inf)
@@ -22,7 +21,7 @@ object Cached {
   }
 
   implicit class CachedTaskOps[A](val task: Task[A]) extends AnyVal {
-    def cache(duration: Duration = Duration.Undefined, cacheErrors: Boolean = true): Task[A] =
+    def cache(duration: Duration, cacheErrors: Boolean = true): Task[A] =
       duration match {
         case Duration.Inf =>
           if (cacheErrors) task.memoize
@@ -65,7 +64,7 @@ object Cached {
           task
       }
 
-    def cacheOnSuccess(duration: Duration = Duration.Undefined): Task[A] =
+    def cacheOnSuccess(duration: Duration): Task[A] =
       cache(duration, cacheErrors = false)
   }
 

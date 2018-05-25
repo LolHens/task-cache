@@ -16,6 +16,7 @@ object Cached {
 
     for (_ <- 0 until 1000) {
       task2.runSyncUnsafe(Duration.Inf)
+      println("a")
       Thread.sleep(100)
     }
   }

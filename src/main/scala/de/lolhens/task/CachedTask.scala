@@ -1,6 +1,6 @@
 package de.lolhens.task
 
-import monix.eval.Task
+import monix.eval.{MVar, Task}
 import monix.execution.Scheduler.Implicits.global
 
 import scala.concurrent.duration._
@@ -31,25 +31,10 @@ object CachedTask {
           (for {
             mvar <- persistence.get[Try[A]](key).memoize
             elemOption <- mvar.take
-            elem <- elemOption.map(Task.now).getOrElse(task.materialize)
+            elem <- elemOption.map(Task.now)
+              .getOrElse(task.materialize)
             newElemOption = Some(elem).filter(_.isSuccess || cacheErrors)
             _ <- mvar.put(newElemOption)
-          } yield
-            elem)
-            .dematerialize
-
-        case undef if undef eq Duration.Undefined =>
-          val emptyRef = SoftReference(null)
-          (for {
-            mvar <- persistence.get[SoftReference[Try[A]]](key).memoize
-            refOption <- mvar.take
-            elemOption = refOption.flatMap(_.get)
-            elem <- elemOption.map(Task.now).getOrElse(task.materialize)
-            newRef = elemOption.map(_ => refOption).getOrElse(
-              if (elem.isSuccess || cacheErrors) Some(SoftReference(elem))
-              else None
-            )
-            _ <- mvar.put(newRef)
           } yield
             elem)
             .dematerialize
@@ -60,13 +45,28 @@ object CachedTask {
             mvar <- persistence.get[(Try[A], Long)](key).memoize
             elemOption <- mvar.take
             now = System.currentTimeMillis()
-            elem <- elemOption.filter(_._2 + millis > now).map(Task.now).getOrElse(
-              task.materialize.map(_ -> now)
-            )
+            elem <- elemOption.filter(_._2 + millis > now).map(Task.now)
+              .getOrElse(task.materialize.map(_ -> now))
             newElemOption = Some(elem).filter(_._1.isSuccess || cacheErrors)
             _ <- mvar.put(newElemOption)
           } yield
             elem._1)
+            .dematerialize
+
+        case undef if undef eq Duration.Undefined =>
+          val emptyRef = SoftReference(null)
+          (for {
+            mvar <- MVar[SoftReference[Try[A]]](emptyRef).memoize
+            ref <- mvar.take
+            elemOption = ref.get
+            elem <- elemOption.map(Task.now).getOrElse(task.materialize)
+            newRef = elemOption.map(_ => ref).getOrElse(
+              if (elem.isSuccess || cacheErrors) SoftReference(elem)
+              else emptyRef
+            )
+            _ <- mvar.put(newRef)
+          } yield
+            elem)
             .dematerialize
 
         case _ =>

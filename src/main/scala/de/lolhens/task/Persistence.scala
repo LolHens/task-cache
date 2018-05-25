@@ -3,17 +3,20 @@ package de.lolhens.task
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardOpenOption}
 
+import de.lolhens.task.Persistence.CacheEntry
 import monix.eval.{MVar, Task}
 import upickle.default.ReadWriter
 
 import scala.util.Try
 
-trait Persistence {
-  protected def get[A: ReadWriter]: Task[MVar[Option[A]]]
+abstract class Persistence[T] {
+  implicit val readWriter: ReadWriter[T]
 
-  def use[A: ReadWriter](f: Option[A] => Task[(Option[A], A)]): Task[A] =
+  def get: Task[MVar[CacheEntry[T]]]
+
+  def use(f: CacheEntry[T] => Task[(CacheEntry[T], Try[T])]): Task[T] =
     for {
-      mvar <- get[A].memoize
+      mvar <- get.memoize
       (_, result) <- mvar.take
         .bracketE(f)((_, e) => e match {
           case Right((put, _)) =>
@@ -27,18 +30,21 @@ trait Persistence {
 }
 
 object Persistence {
+  type CacheEntry[T] = Option[(Try[T], Long)]
 
-  object Memory extends Persistence {
-    override def get[A: ReadWriter]: Task[MVar[Option[A]]] = MVar[Option[A]](None)
+  case class Memory[T]() extends Persistence[T] {
+    override implicit val readWriter: ReadWriter[T] = null
+
+    override def get: Task[MVar[Option[T]]] = MVar[Option[T]](None)
   }
 
-  case class File(path: Path) extends Persistence {
-    override def get[A: ReadWriter]: Task[MVar[Option[A]]] =
+  case class File[T](path: Path)(implicit val readWriter: ReadWriter[T]) extends Persistence[T] {
+    override def get: Task[MVar[Option[T]]] =
       for {
         lock <- MVar(())
       } yield
-        new MVar[Option[A]] {
-          override def put(value: Option[A]): Task[Unit] =
+        new MVar[Option[T]] {
+          override def put(value: Option[T]): Task[Unit] =
             for {
               serialized <- Task(upickle.default.write(value))
               bytes <- Task(serialized.getBytes(StandardCharsets.UTF_8))
@@ -49,14 +55,14 @@ object Persistence {
               _ <- lock.put(())
             } yield ()
 
-          override def take: Task[Option[A]] =
+          override def take: Task[Option[T]] =
             for {
               _ <- lock.take
               value <- read
             } yield
               value
 
-          override def read: Task[Option[A]] =
+          override def read: Task[Option[T]] =
             for {
               serializedOption <- Task {
                 for {
@@ -67,7 +73,7 @@ object Persistence {
                   serialized
               }
               value <- Task(
-                serializedOption.flatMap(upickle.default.read[Option[A]](_))
+                serializedOption.flatMap(upickle.default.read[Option[T]](_))
               )
             } yield
               value

@@ -22,7 +22,10 @@ object ObservableSink {
     val observable = Observable.fromTask(
       Task.deferAction { implicit scheduler =>
         Task.now(Observable.repeatEvalF(take).share)
-      }).flatten
+      })
+      .cache
+      .flatten
+
 
     f -> observable
   }

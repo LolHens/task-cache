@@ -14,8 +14,8 @@ abstract class Persistence[T] {
 
   def get: Task[MVar[CacheEntry[T]]]
 
-  def use(f: CacheEntry[T] => Task[(CacheEntry[T], Try[T])]): Task[T] =
-    for {
+  def use(f: CacheEntry[T] => Task[(CacheEntry[T], Try[T])]): Task[T] = ???
+    /*for {
       mvar <- get.memoize
       (_, result) <- mvar.take
         .bracketE(f)((_, e) => e match {
@@ -26,7 +26,7 @@ abstract class Persistence[T] {
             mvar.put(None)
         })
     } yield
-      result
+      result*/
 }
 
 object Persistence {
@@ -35,12 +35,12 @@ object Persistence {
   case class Memory[T]() extends Persistence[T] {
     override implicit val readWriter: ReadWriter[T] = null
 
-    override def get: Task[MVar[Option[T]]] = MVar[Option[T]](None)
+    override def get: Task[MVar[CacheEntry[T]]] = MVar[CacheEntry[T]](None)
   }
 
   case class File[T](path: Path)(implicit val readWriter: ReadWriter[T]) extends Persistence[T] {
-    override def get: Task[MVar[Option[T]]] =
-      for {
+    override def get: Task[MVar[CacheEntry[T]]] = ???
+      /*for {
         lock <- MVar(())
       } yield
         new MVar[Option[T]] {
@@ -77,7 +77,7 @@ object Persistence {
               )
             } yield
               value
-        }
+        }*/
   }
 
 }

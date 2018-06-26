@@ -109,7 +109,7 @@ object CachedTask {
         } yield
           (newElemOption, elem._1)
       }
-        .dematerialize
+        //.dematerialize
 
     def persistOnSuccess(persistence: Persistence[T],
                          ttl: Duration): Task[T] =

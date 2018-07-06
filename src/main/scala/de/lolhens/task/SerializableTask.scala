@@ -77,7 +77,7 @@ object SerializableTask {
     val task = Task(List("ASDF", "JKLÖ"))
 
     import monix.execution.Scheduler.Implicits.global
-    import objectOutputStreamOps._
-    println(task.pickle.unpickle[List[String]].runSyncUnsafe(Duration.Inf))
+    import upickleOps._
+    println(task.pickle.pickle.unpickle[String].unpickle[List[String]].runSyncUnsafe(Duration.Inf))
   }
 }

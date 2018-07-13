@@ -11,7 +11,7 @@ class TaskRouter {
     LocalTaskHandle(nextId.getAndIncrement(), task)
   }
 
-  def remoteHandle[A](id: Long): RemoteTaskHandle[A] = ???
+  private def remoteHandle[A](id: Long): RemoteTaskHandle[A] = ???
 }
 
 object TaskRouter {

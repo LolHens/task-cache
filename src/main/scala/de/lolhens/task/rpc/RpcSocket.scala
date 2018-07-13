@@ -22,7 +22,7 @@ object RpcSocket {
 
   class ActiveLocalRpc() extends ActiveRpc("")
 
-  class ActiveRemoteRpc() extends ActiveRpc("") {
+  abstract class ActiveRemoteRpc() extends ActiveRpc("") {
     val future: Future[_]
   }
 }

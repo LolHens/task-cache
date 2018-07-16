@@ -2,7 +2,7 @@ package de.lolhens.task.remote
 
 import de.lolhens.task.pickling.Pickler
 import de.lolhens.task.remote.RpcRouter.Action._
-import de.lolhens.task.remote.RpcRouter.{Action, Id}
+import de.lolhens.task.remote.RpcRouter.{Action, ClientTaskId, Id}
 import monix.eval.Task
 import monix.execution.atomic.Atomic
 import monix.execution.{Cancelable, CancelableFuture, Scheduler}
@@ -14,26 +14,30 @@ import scala.util.Try
 class RpcRouter {
   var r: RpcRouter = null
 
-  def sendString(string: String)(implicit pickler: Pickler[Action]): Task[Unit] =
+  private val cancelables = Atomic(Map.empty[Id, Cancelable])
+  private val promises = Atomic(Map.empty[Id, Promise[_]])
+  private val nextId = Atomic(0L)
+
+  def sendString(string: String)(implicit pickler: Pickler[Action[_]]): Task[Unit] =
     r.receiveString(string)(pickler)
 
-  def send(action: Action): Task[Unit] = {
+  def send(action: Action[_]): Task[Unit] = {
     import de.lolhens.task.pickling.objectOutputStreamOps._
     for {
-      string <- implicitly[Pickler[Action]].pickle(action)
+      string <- implicitly[Pickler[Action[_]]].pickle(action)
       _ <- sendString(string)
     } yield ()
   }
 
-  def receiveString(string: String)(implicit pickler: Pickler[Action]): Task[Unit] =
+  def receiveString(string: String)(implicit pickler: Pickler[Action[_]]): Task[Unit] =
     for {
       action <- pickler.unpickle(string)
       _ <- receive(action)
     } yield ()
 
-  def receive(action: Action): Task[Unit] = action match {
-    case Run(name, id) => Task.deferAction(scheduler => Task {
-      val future = runTask(name)(scheduler)
+  def receive(action: Action[_]): Task[Unit] = action match {
+    case Run(taskId, id) => Task.deferAction(scheduler => Task {
+      val future = runTask(taskId)(scheduler)
       future.onComplete { result =>
         send(Result(id, result)).runAsync(scheduler)
       }(scheduler)
@@ -56,18 +60,8 @@ class RpcRouter {
     }
   }
 
-  private val cancelables: Atomic[Map[Id, Cancelable]] = Atomic(Map.empty[Id, Cancelable])
-  private val promises: Atomic[Map[Id, Promise[_]]] = Atomic(Map.empty[Id, Promise[_]])
-
-  private def runTask(name: String)(scheduler: Scheduler): CancelableFuture[_] = {
-    Task {
-      println("test")
-      5
-    }.runAsync(Scheduler.global)
-  }
-
-  def task[A](name: String): Task[A] = Task.deferFutureAction { scheduler =>
-    val id: Id = 0
+  def task[A](taskId: ClientTaskId[A]): Task[A] = Task.deferFutureAction { scheduler =>
+    val id: Id = nextId.getAndIncrement()
     val cancelable = Cancelable { () =>
       send(Cancel(id)).runAsync(scheduler)
     }
@@ -75,41 +69,49 @@ class RpcRouter {
     val entry = id -> promise
     promises.transform(_ + entry)
     val future = CancelableFuture(promise.future, cancelable)
-    send(Run(name, id)).runAsync(scheduler)
+    send(Run(taskId.id, id)).runAsync(scheduler)
     future
+  }
+
+  private def runTask(taskId: String)(scheduler: Scheduler): CancelableFuture[_] = {
+    Task {
+      println("test")
+      5
+    }.runAsync(Scheduler.global)
   }
 }
 
 object RpcRouter {
   type Id = Long
 
-  trait Action {
+  trait Action[A] {
     def id: Id
   }
 
   object Action {
 
-    case class Run(name: String, id: Id) extends Action
+    case class Run(name: String, id: Id) extends Action[Nothing]
 
-    case class Result[A](id: Id, result: Try[A]) extends Action
+    case class Result[A](id: Id, result: Try[A]) extends Action[A]
 
-    case class Cancel(id: Id) extends Action
+    case class Cancel(id: Id) extends Action[Nothing]
 
   }
 
-  trait TaskID[A] {
-    def id: String
+  case class ClientTaskId[A](id: String)(implicit pickler: Pickler[Action[A]]) {
+    def task(task: Task[A]): ServerTaskId[A] = new ServerTaskId[A](id)(task)
   }
 
-  case class ServerTaskID[A](id: String)(task: Task[A]) extends TaskID[A]
+  class ServerTaskId[A](id: String)(val task: Task[A])(implicit pickler: Pickler[Action[A]]) extends ClientTaskId[A](id)
 
   def main(args: Array[String]): Unit = {
     val server = new RpcRouter
     val client = new RpcRouter
     server.r = client
     client.r = server
+    import de.lolhens.task.pickling.objectOutputStreamOps._
     import monix.execution.Scheduler.Implicits.global
-    val task = client.task[Int]("test")
+    val task = client.task(ClientTaskId[Int]("test"))
     for (i <- 0 until 10)
       println("a: " + task.runSyncUnsafe(Duration.Inf))
   }

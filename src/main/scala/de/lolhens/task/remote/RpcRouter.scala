@@ -1,62 +1,77 @@
 package de.lolhens.task.remote
 
-import de.lolhens.task.remote.RpcRouter.Action.{Cancel, Result, Sync}
+import de.lolhens.task.pickling.{Pickler, TaskPickler}
+import de.lolhens.task.remote.RpcRouter.Action._
 import de.lolhens.task.remote.RpcRouter.{Action, Id}
 import monix.eval.Task
-import monix.execution.{Cancelable, CancelableFuture}
-
+import monix.execution.atomic.Atomic
+import monix.execution.{Cancelable, CancelableFuture, Scheduler}
+import Pickler._
+import scala.concurrent.Promise
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Future, Promise}
 import scala.util.Try
 
 class RpcRouter {
   var r: RpcRouter = null
 
+  def sendString(string: String)(implicit pickler: Pickler[Action]): Task[Unit] =
+    r.receiveString(string)(pickler)
 
   def send(action: Action): Task[Unit] = {
-    r.receive(action)
+    import de.lolhens.task.pickling.objectOutputStreamOps._
+    for {
+      string <- implicitly[Pickler[Action]].pickle(action)
+      _ <- sendString(string)
+    } yield ()
   }
+
+  def receiveString(string: String)(implicit pickler: Pickler[Action]): Task[Unit] =
+    for {
+      action <- pickler.unpickle(string)
+      _ <- receive(action)
+    } yield ()
 
   def receive(action: Action): Task[Unit] = action match {
-    case Sync(id) =>
-      println(handlers)
-      handlers.get(id).map {handler =>
-        Task.deferAction { scheduler => Task {
-          val promise = Promise[Any]()
-          val cancelableFuture = CancelableFuture(promise.future, Cancelable { () =>
-            send(Cancel(id)).runAsync(scheduler)
-          })
-          remoteFutures = remoteFutures + (id -> promise)
-          handler(cancelableFuture)
-        }}
-      }.get//.getOrElse(Task.unit)
+    case Run(name, id) => Task.deferAction(scheduler => Task {
+      val future = runTask(name)
+      future.onComplete { result =>
+        send(Result(id, result)).runAsync(scheduler)
+      }(scheduler)
+      val entry = id -> future
+      cancelables.transform(_ + entry)
+    })
 
-    case Result(id, result) =>
-      Task{
-        remoteFutures(id).asInstanceOf[Promise[Any]].complete(result)
-      }
+    case Cancel(id) => Task {
+      cancelables.get.get(id).foreach(_.cancel())
+    }
 
-    case Cancel(id) =>
-      Task(localFutures(id).cancel())
-  }
-
-  private var handlers: Map[Id, CancelableFuture[_] => Unit] = Map.empty
-  private var remoteFutures: Map[Id, Promise[_]] = Map.empty
-  private var localFutures: Map[Id, CancelableFuture[_]] = Map.empty
-
-  def sendFuture[A](future: CancelableFuture[A]): Task[Id] = Task.deferAction { implicit scheduler =>
-    val id = 0L
-    localFutures = localFutures + (id -> future)
-    send(Sync(id)).flatMap { _ =>
-      future.onComplete(r => send(Result(id, r)).runAsync)
-      Task.now(id)
+    case Result(id, result) => Task {
+      promises.get.get(id).foreach(_.asInstanceOf[Promise[Any]].tryComplete(result))
     }
   }
 
-  def putHandler[A](id: Id, handler: CancelableFuture[A] => Unit): Task[Unit] =
-    Task{
-      handlers = handlers + (id -> handler.asInstanceOf[CancelableFuture[Any] => Unit])
+  private val cancelables: Atomic[Map[Id, Cancelable]] = Atomic(Map.empty[Id, Cancelable])
+  private val promises: Atomic[Map[Id, Promise[_]]] = Atomic(Map.empty[Id, Promise[_]])
+
+  private def runTask(name: String): CancelableFuture[_] = {
+    Task {
+      println("test")
+      5
+    }.runAsync(Scheduler.global)
+  }
+
+  def task[A](name: String): Task[A] = Task.deferFutureAction { scheduler =>
+    val id: Id = 0
+    val cancelable = Cancelable { () =>
+      send(Cancel(id)).runAsync(scheduler)
     }
+    val promise = Promise[A]()
+    val entry = id -> promise
+    promises.transform(_ + entry)
+    val future = CancelableFuture(promise.future, cancelable)
+    send(Run(name, id)).runAsync(scheduler)
+    future
+  }
 }
 
 object RpcRouter {
@@ -67,9 +82,13 @@ object RpcRouter {
   }
 
   object Action {
-    case class Sync(id: Id) extends Action
+
+    case class Run(name: String, id: Id) extends Action
+
     case class Result[A](id: Id, result: Try[A]) extends Action
+
     case class Cancel(id: Id) extends Action
+
   }
 
   def main(args: Array[String]): Unit = {
@@ -78,11 +97,8 @@ object RpcRouter {
     server.r = client
     client.r = server
     import monix.execution.Scheduler.Implicits.global
-    val f = CancelableFuture(Future(4), Cancelable())
-    client.putHandler[Int](0L, {future =>
-      future.foreach(println)
-    }).runSyncUnsafe(Duration.Inf)
-    server.sendFuture(f).runSyncUnsafe(Duration.Inf)
-    Thread.sleep(5000)
+    val task = client.task[Int]("test")
+    for (i <- 0 until 10)
+      println("a: " + task.runSyncUnsafe(Duration.Inf))
   }
 }

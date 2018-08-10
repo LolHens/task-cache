@@ -109,6 +109,12 @@ object RpcRouter {
     def id: Id
   }
 
+  val serializers: Map[Long, Pickler[_]] = ???
+
+  case class SerialzedType(id: Long, serialized: String) {
+    def deserialize: Any = serializers(id).unpickle(serialized)
+  }
+
   object Action {
 
     case class Run(taskId: String, id: Id) extends Action[Nothing]
